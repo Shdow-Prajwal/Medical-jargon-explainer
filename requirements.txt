@@ -1,0 +1,14 @@
+fastapi>=0.110
+uvicorn>=0.29
+pymupdf>=1.23
+pydantic>=2.7
+pydantic-settings>=2.3
+ollama>=0.3
+chromadb>=0.5
+pillow>=10.0
+streamlit>=1.35
+requests>=2.31
+structlog>=24.1
+tenacity>=8.2
+apscheduler>=3.10
+diskcache>=5.6

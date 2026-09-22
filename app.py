@@ -19,7 +19,9 @@ if uploaded_file is not None and st.button("Process Document", type="primary"):
     with st.spinner("Rendering and indexing pages..."):
         files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
         try:
-            response = requests.post(UPLOAD_URL, files=files, params={"dpi": dpi_setting}, timeout=600)
+            response = requests.post(
+                UPLOAD_URL, files=files, params={"dpi": dpi_setting}, timeout=600
+            )
             if response.status_code == 200:
                 st.session_state["ingest"] = response.json()
                 st.session_state.pop("answer", None)
@@ -37,7 +39,7 @@ if "ingest" in st.session_state:
         with cols[idx % 3]:
             st.subheader(f"Page {page_info['page']}")
             st.image(page_info["path"])
-            st.caption(f"{page_info['resolution']}")
+            st.caption(page_info["resolution"])
 
     st.divider()
     question = st.text_input("Ask a question about this document")
@@ -58,9 +60,11 @@ if "ingest" in st.session_state:
 
     if "answer" in st.session_state:
         ans = st.session_state["answer"]
-        st.write(f"Pages read: {ans['pages_used']}")
+        st.caption(f"Pages read: {ans['pages_used']}")
+        st.write(ans["result"]["answer"])
+
         findings = ans["result"]["findings"]
         if findings:
-            st.dataframe(findings, use_container_width=True)
-        else:
-            st.info("The model found nothing matching that question on these pages.")
+            cols_order = ["name", "value", "unit", "reference_range", "status",
+                          "what_it_measures", "page"]
+            st.dataframe([{c: f.get(c) for c in cols_order} for f in findings])

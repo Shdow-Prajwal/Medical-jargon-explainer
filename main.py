@@ -1,33 +1,81 @@
+import time
+import uuid
 from pathlib import Path
+from contextlib import asynccontextmanager
+
 import fitz  # PyMuPDF
-from fastapi import FastAPI, File, HTTPException, UploadFile, Query
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile, Request, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import structlog
 
+from config import get_settings
+from logging_config import configure_logging
+from health import router as health_router
 from retriever import index_page, search
-from vlm import extract
+from vlm import check_range, explain, extract
+from document_store import document_store
+from cleanup_job import start_scheduler
 
-app = FastAPI(title="Document Intelligence Service")
 
-OUTPUT_DIR = Path("./extracted_pages")
+settings = get_settings()
+configure_logging()
+logger = structlog.get_logger()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    scheduler = start_scheduler()
+    logger.info("app.startup")
+    yield
+    # Shutdown
+    scheduler.shutdown()
+    logger.info("app.shutdown")
+
+
+app = FastAPI(title="Document Intelligence Service", lifespan=lifespan)
+
+# Mount health router
+app.include_router(health_router)
+
+# Request ID middleware
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(request_id=request_id)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+OUTPUT_DIR = Path(settings.output_dir)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=OUTPUT_DIR), name="static")
 
 
 @app.post("/upload")
-def upload_and_convert_pdf(
+async def upload_and_convert_pdf(
     file: UploadFile = File(...),
-    dpi: int = Query(default=300, ge=72, le=600),
+    dpi: int = Query(default=300, ge=settings.min_dpi, le=settings.max_dpi),
 ):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Uploaded file must be a PDF.")
 
-    pdf_bytes = file.file.read()
+    pdf_bytes = await file.read()
 
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     except Exception as e:
+        logger.error("pdf.parse_failed", error=str(e))
         raise HTTPException(status_code=500, detail=f"Failed to parse PDF stream: {e}")
+
+    if len(doc) > settings.max_pages:
+        raise HTTPException(
+            status_code=413,
+            detail=f"PDF has {len(doc)} pages; the limit is {settings.max_pages}.",
+        )
 
     doc_id = Path(file.filename).stem
     saved_pages = []
@@ -45,6 +93,7 @@ def upload_and_convert_pdf(
         try:
             index_page(doc_id, page_num + 1, page.get_text(), str(image_path.resolve()))
         except Exception as e:
+            logger.error("indexing.failed", doc_id=doc_id, page=page_num + 1, error=str(e))
             raise HTTPException(
                 status_code=503,
                 detail=f"Indexing failed. Is Ollama running and is nomic-embed-text pulled? ({e})",
@@ -60,6 +109,7 @@ def upload_and_convert_pdf(
 
     doc.close()
 
+    logger.info("upload.success", doc_id=doc_id, pages=len(saved_pages), dpi=dpi)
     return {
         "status": "success",
         "doc_id": doc_id,
@@ -77,17 +127,60 @@ class QueryRequest(BaseModel):
 
 
 @app.post("/query")
-def query_document(req: QueryRequest):
-    pages = search(req.question, req.doc_id, k=req.k)
+async def query_document(req: QueryRequest):
+    t0 = time.time()
+    pages = search(req.question, req.doc_id, k=min(req.k, 3))
     if not pages:
         raise HTTPException(status_code=404, detail="No indexed pages for this document.")
+    t1 = time.time()
+
     try:
         result = extract(req.question, pages)
+        t2 = time.time()
+        what_it_is = explain(result.findings)
+        t3 = time.time()
     except Exception as e:
+        logger.error("vlm.failed", error=str(e))
         raise HTTPException(status_code=503, detail=f"VLM call failed: {e}")
-    return {"pages_used": [p["page"] for p in pages], "result": result.model_dump()}
+
+    logger.info("query.timings", search=f"{t1-t0:.2f}s", extract=f"{t2-t1:.2f}s", explain=f"{t3-t2:.2f}s")
+
+    rows = [
+        {**f.model_dump(),
+         "status": check_range(f.value, f.reference_range),
+         "what_it_measures": what_it_is.get(f.name, "")}
+        for f in result.findings
+    ]
+    return {
+        "pages_used": [p["page"] for p in pages],
+        "result": {"answer": result.answer, "findings": rows},
+    }
+
+
+# Document lifecycle endpoints
+@app.get("/documents")
+async def list_documents():
+    docs = document_store.list_docs()
+    return [{"doc_id": d.doc_id, "page_count": d.page_count, "created_at": d.created_at, "size_bytes": d.size_bytes} for d in docs]
+
+
+@app.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str):
+    # Delete images
+    for img_path in OUTPUT_DIR.glob(f"{doc_id}_page_*.png"):
+        try:
+            img_path.unlink()
+            logger.info("document.image_deleted", file=img_path.name)
+        except Exception as e:
+            logger.warning("document.image_delete_failed", file=img_path.name, error=str(e))
+
+    success = document_store.delete_doc(doc_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Document not found")
+    logger.info("document.deleted", doc_id=doc_id)
+    return {"status": "deleted", "doc_id": doc_id}
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000, access_log=False)

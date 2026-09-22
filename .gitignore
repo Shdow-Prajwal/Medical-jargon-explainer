@@ -1,0 +1,7 @@
+# env variables
+__pycache__/
+
+# local data
+cache/
+db/
+extracted_pages/
