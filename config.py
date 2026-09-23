@@ -26,10 +26,11 @@ class Settings(BaseSettings):
     db_path: str = "./db"
     cache_dir: str = "./cache"
     doc_index_path: str = "./db/doc_index.json"
+    dict_db_path: str = "./medical_terms.db"
 
     # Cleanup
     cleanup_ttl_days: int = 30
-    cleanup_schedule_hour: int = 3  # 03:00 local
+    cleanup_schedule_hour: int = 3
 
     # Logging
     log_level: str = "INFO"

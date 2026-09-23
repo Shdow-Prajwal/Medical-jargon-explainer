@@ -16,21 +16,35 @@ from retriever import index_page, search
 from vlm import check_range, explain, extract
 from document_store import document_store
 from cleanup_job import start_scheduler
+from term_indexer import index_terms_for_document, load_term_index
+import seed_medical_db
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 
 settings = get_settings()
 configure_logging()
 logger = structlog.get_logger()
 
+# Thread pool for background term indexing
+TERM_INDEX_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="term-index")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    # Auto-seed medical dictionary if missing
+    from pathlib import Path
+    if not Path(settings.dict_db_path).exists():
+        logger.info("dict.seeding", path=settings.dict_db_path)
+        seed_medical_db.init_db()
+    
     scheduler = start_scheduler()
     logger.info("app.startup")
     yield
     # Shutdown
     scheduler.shutdown()
+    TERM_INDEX_EXECUTOR.shutdown(wait=True)
     logger.info("app.shutdown")
 
 
@@ -109,6 +123,14 @@ async def upload_and_convert_pdf(
 
     doc.close()
 
+    # Start term indexing in background
+    if len(saved_pages) <= settings.max_pages:
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(TERM_INDEX_EXECUTOR, index_terms_for_document, doc_id)
+        logger.info("upload.term_indexing_started", doc_id=doc_id)
+    else:
+        logger.info("upload.term_indexing_skipped", doc_id=doc_id, pages=len(saved_pages))
+
     logger.info("upload.success", doc_id=doc_id, pages=len(saved_pages), dpi=dpi)
     return {
         "status": "success",
@@ -177,8 +199,24 @@ async def delete_document(doc_id: str):
     success = document_store.delete_doc(doc_id)
     if not success:
         raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Also delete term index
+    index_path = Path("./term_indexes") / f"{doc_id}.json"
+    if index_path.exists():
+        index_path.unlink()
+    
     logger.info("document.deleted", doc_id=doc_id)
     return {"status": "deleted", "doc_id": doc_id}
+
+
+# Term index endpoints
+@app.get("/terms/{doc_id}")
+async def get_term_index(doc_id: str):
+    """Get the medical term index for a document."""
+    index = load_term_index(doc_id)
+    if not index:
+        raise HTTPException(status_code=404, detail="Term index not found. It may still be generating or the document was not processed.")
+    return index
 
 
 if __name__ == "__main__":

@@ -5,3 +5,7 @@ __pycache__/
 cache/
 db/
 extracted_pages/
+*.db
+term_indexes/
+scripts/
+analysis_results/

@@ -1,0 +1,47 @@
+{
+  "doc_id": "test",
+  "total_pages": 3,
+  "pages_processed": 3,
+  "findings": [
+    {
+      "name": "eGFR",
+      "value": "45",
+      "unit": "mL/dL",
+      "reference_range": ">60",
+      "flag": "LOW",
+      "page": 1,
+      "bbox": [],
+      "status": "low",
+      "what_it_measures": "Estimated Glomerular Filtration Rate. Measures how well the kidneys filter waste from blood."
+    },
+    {
+      "name": "HbA1c",
+      "value": "7.2",
+      "unit": "%",
+      "reference_range": "<5.7",
+      "flag": "HIGH",
+      "page": 1,
+      "bbox": [],
+      "status": "high",
+      "what_it_measures": "Glycated Hemoglobin. Measures average blood glucose levels over the preceding 2\u20133 months."
+    },
+    {
+      "name": "TSH",
+      "value": "2.5",
+      "unit": "mIU/L",
+      "reference_range": "0.4-4.0",
+      "flag": "",
+      "page": 1,
+      "bbox": [],
+      "status": "normal",
+      "what_it_measures": "Thyroid-Stimulating Hormone. Produced by the pituitary gland to regulate thyroid activity."
+    }
+  ],
+  "explanations": {
+    "eGFR": "Estimated Glomerular Filtration Rate. Measures how well the kidneys filter waste from blood.",
+    "HbA1c": "Glycated Hemoglobin. Measures average blood glucose levels over the preceding 2\u20133 months.",
+    "TSH": "Thyroid-Stimulating Hormone. Produced by the pituitary gland to regulate thyroid activity."
+  },
+  "summary": "Document contains 3 lab values (2 flagged). Categories: Thyroid-Stimulating Hormone, Glycated Hemoglobin, Estimated Glomerular Filtration Rate.",
+  "processing_time_seconds": 43.5
+}
